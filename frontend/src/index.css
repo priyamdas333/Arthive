@@ -1,0 +1,64 @@
+/* src/index.css — global styles + theming.
+   THEMING APPROACH: we define colors as CSS variables on :root (light) and
+   override them under [data-theme="dark"]. Toggling one attribute on <html>
+   flips the whole app. Components never hardcode colors — they use var(--x). */
+
+:root {
+  --bg: #f7f6f3;
+  --surface: #ffffff;
+  --surface-2: #faf9f7;
+  --border: #e6e3dd;
+  --border-strong: #d4d0c8;
+  --text: #1a1a18;
+  --text-2: #6b6862;
+  --text-3: #9b988f;
+  --accent: #2f6fd6;
+  --accent-bg: #e8f0fc;
+  --green: #2f8f5b;  --green-bg: #e6f4ec;
+  --purple: #6b4fc4; --purple-bg: #efeafb;
+  --amber: #b07910;  --amber-bg: #fbf0d9;
+  --red: #c23b3b;    --red-bg: #fbe9e9;
+  --star: #e0a52b;
+  --shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+[data-theme="dark"] {
+  --bg: #131312;
+  --surface: #1d1d1b;
+  --surface-2: #232321;
+  --border: #2f2f2c;
+  --border-strong: #44443f;
+  --text: #ececea;
+  --text-2: #a3a199;
+  --text-3: #706e67;
+  --accent: #5b97e8;
+  --accent-bg: #16263d;
+  --green: #5cc285; --green-bg: #14271c;
+  --purple: #9b85e0; --purple-bg: #211a36;
+  --amber: #e0a52b; --amber-bg: #2d2410;
+  --red: #e87070;   --red-bg: #2d1515;
+  --star: #e0a52b;
+  --shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  /* smooth the theme switch */
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+button { font-family: inherit; cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+
+/* tiny utility for the live pulse dot */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot { animation: pulse 2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }

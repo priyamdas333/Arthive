@@ -1,0 +1,29 @@
+# .github/workflows/scan.yml
+# The scheduler. Runs scan.py every 3 hours on GitHub's free runners, writes
+# results to Upstash Redis, exits. This is your free background worker.
+#
+# SETUP:
+#   Repo Settings -> Secrets and variables -> Actions -> add secret REDIS_URL
+#   (your Upstash rediss://... URL). Then commit this file.
+
+name: scan-news
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"   # every 3 hours (UTC)
+  workflow_dispatch:          # manual "Run workflow" button in the Actions tab
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30        # ~9 min for 500 companies; 30 is safe headroom
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r worker/requirements.txt
+      - name: Run scan and write to Redis
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        working-directory: worker
+        run: python scan.py
