@@ -10,7 +10,7 @@ name: scan-news
 
 on:
   schedule:
-    - cron: "0 */3 * * *"   # every 3 hours (UTC)
+    - cron: "0 * * * *"   # every 3 hours (UTC)
   workflow_dispatch:          # manual "Run workflow" button in the Actions tab
 
 jobs:
