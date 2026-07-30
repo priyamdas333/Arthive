@@ -1,16 +1,12 @@
-// src/App.jsx — the whole app.
-// Kept as one file for learnability; you can split into components later.
-//
-// REACT IN ONE PARAGRAPH: a component is a function that returns UI (JSX).
-// "state" is data that, when it changes, makes React re-run the function and
-// update the screen. useState creates state. useEffect runs side-effects (like
-// fetching) when the component mounts or when chosen values change. That's 90%
-// of what's happening below.
+// src/App.jsx — Arthive, with cold-start handling that keeps users engaged:
+//  1. If we have a cached feed, show it INSTANTLY (marked "updating") while the
+//     backend wakes — returning visitors basically never see a blank wait.
+//  2. If there's no cache (first-ever visit), rotate interesting Indian-market
+//     facts during the ~50s wake so the wait feels engaging, not broken.
 
 import { useState, useEffect, useCallback } from 'react'
-import { getNews, recordVisit } from './api.js'
+import { getNews, getCachedNews, recordVisit } from './api.js'
 
-// Map each category tag -> its color CSS variables, for the colored pills.
 const TAG_STYLE = {
   results:    { fg: 'var(--green)',  bg: 'var(--green-bg)'  },
   order_win:  { fg: 'var(--purple)', bg: 'var(--purple-bg)' },
@@ -42,7 +38,22 @@ const CATEGORIES = [
   { id: 'regulatory', label: 'Regulatory' },
 ]
 
-// Convert a unix timestamp into "2h ago" style text.
+// Rotating facts shown ONLY during a cold start with no cached feed.
+const MARKET_FACTS = [
+  'The BSE, founded in 1875, is Asia\u2019s oldest stock exchange.',
+  'NIFTY 50 tracks the 50 largest, most liquid Indian companies on the NSE.',
+  'SEBI requires companies to disclose price-sensitive news to exchanges first \u2014 before the media.',
+  'The NSE is the world\u2019s largest derivatives exchange by number of contracts traded.',
+  '\u201CDalal Street\u201D in Mumbai is India\u2019s Wall Street \u2014 home to the BSE.',
+  'A stock hitting its upper circuit means trading is paused after a sharp rise.',
+  'The Sensex tracks 30 well-established companies across key BSE sectors.',
+  'FII and DII flows \u2014 foreign and domestic institutional money \u2014 often drive daily market moves.',
+  'Muhurat trading is a special one-hour Diwali session considered auspicious to trade.',
+  'India\u2019s market regulator, SEBI, was given statutory powers in 1992.',
+  'A company\u2019s quarterly results can move its stock sharply within seconds of release.',
+  'The NIFTY 500 covers about 96% of India\u2019s total listed market capitalisation.',
+]
+
 function timeAgo(ts) {
   const s = Math.floor(Date.now() / 1000) - ts
   if (s < 60) return 'just now'
@@ -52,73 +63,80 @@ function timeAgo(ts) {
 }
 
 export default function App() {
-  // --- STATE: each useState returns [value, setter]. Changing a value
-  // re-renders the component. ---
   const [theme, setTheme] = useState(() =>
-    // read saved theme on first load; default dark (finance feel)
     localStorage.getItem('arthive-theme') || 'dark'
   )
-  const [windowId, setWindowId] = useState('4h')   // selected time window
-  const [category, setCategory] = useState('all')  // selected category filter
-  const [items, setItems] = useState([])           // news items from the API
-  const [meta, setMeta] = useState(null)           // {updated_at, counts, ...}
+  const [windowId, setWindowId] = useState('4h')
+  const [category, setCategory] = useState('all')
+  const [items, setItems] = useState([])
+  const [meta, setMeta] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [waking, setWaking] = useState(false)      // backend cold-starting
+  const [fromCache, setFromCache] = useState(false) // showing stale cached feed
   const [error, setError] = useState(null)
   const [visits, setVisits] = useState(null)
 
-  // watchlist: a Set of symbols the user starred, persisted in the browser.
-  // (Personalization is the strongest repeat-visit lever.)
   const [watchlist, setWatchlist] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('arthive-watchlist') || '[]')) }
     catch { return new Set() }
   })
   const [onlyWatchlist, setOnlyWatchlist] = useState(false)
 
-  // "new since last visit": remember the newest timestamp we showed last time.
   const [lastSeen] = useState(() =>
     Number(localStorage.getItem('arthive-lastseen') || 0)
   )
 
-  // --- EFFECT: apply the theme to <html> and save it, whenever theme changes ---
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('arthive-theme', theme)
   }, [theme])
 
-  // --- EFFECT: record one visit on first load only (empty [] = run once) ---
   useEffect(() => {
     recordVisit().then(setVisits)
   }, [])
 
-  // --- DATA FETCH: a function we can call to (re)load news for a window. ---
-  // useCallback memoizes it so the effect below doesn't re-create it each render.
   const load = useCallback(async (win) => {
-    setLoading(true)
     setError(null)
+    setWaking(false)
+
+    // 1. Instantly show cached feed if we have one, so the screen isn't blank.
+    const cached = getCachedNews(win)
+    if (cached && cached.items && cached.items.length) {
+      setItems(cached.items)
+      setMeta(cached.meta)
+      setFromCache(true)
+      setLoading(false)      // we already have something to show
+    } else {
+      setFromCache(false)
+      setLoading(true)       // nothing cached -> show waking/facts state
+    }
+
+    // 2. Fetch fresh data in the background (retries while backend wakes).
     try {
-      const data = await getNews(win)
+      const data = await getNews(win, (status) => {
+        setWaking(status === 'waking')
+      })
       setItems(data.items || [])
       setMeta(data.meta || null)
-      // remember the newest item time so next visit can compute "new since"
+      setFromCache(false)
       if (data.items && data.items.length) {
         localStorage.setItem('arthive-lastseen', String(data.items[0].ts))
       }
     } catch (e) {
-      setError('Could not load news. Retrying shortly.')
+      // only show an error if we had nothing cached to fall back on
+      if (!cached) setError('Could not load news. Please refresh in a moment.')
     } finally {
       setLoading(false)
+      setWaking(false)
     }
   }, [])
 
-  // --- EFFECT: load whenever the window changes; also auto-refresh every 3h. ---
   useEffect(() => {
     load(windowId)
-    // auto-refresh keeps the feed fresh without a manual reload
     const id = setInterval(() => load(windowId), 3 * 60 * 60 * 1000)
-    return () => clearInterval(id)   // cleanup when window changes/unmounts
+    return () => clearInterval(id)
   }, [windowId, load])
 
-  // --- EVENT HANDLERS ---
   const toggleStar = (symbol) => {
     setWatchlist((prev) => {
       const next = new Set(prev)
@@ -128,7 +146,6 @@ export default function App() {
     })
   }
 
-  // --- DERIVED DATA: filter the items for display (no extra state needed) ---
   const visible = items.filter((it) => {
     if (onlyWatchlist && !watchlist.has(it.symbol)) return false
     if (category !== 'all' && it.category !== category) return false
@@ -142,9 +159,10 @@ export default function App() {
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
         meta={meta}
+        fromCache={fromCache}
+        waking={waking}
       />
 
-      {/* time-window + watchlist row */}
       <div style={{ display: 'flex', gap: 7, marginBottom: 10, flexWrap: 'wrap' }}>
         {WINDOWS.map((w) => (
           <Pill key={w.id} on={windowId === w.id} onClick={() => setWindowId(w.id)}>
@@ -157,7 +175,6 @@ export default function App() {
         </Pill>
       </div>
 
-      {/* category row */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
         {CATEGORIES.map((c) => (
           <Pill key={c.id} small on={category === c.id} onClick={() => setCategory(c.id)}>
@@ -166,7 +183,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* "new since last visit" hook */}
       {newCount > 0 && !loading && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />
@@ -176,9 +192,9 @@ export default function App() {
         </div>
       )}
 
-      {/* the feed */}
       {loading ? (
-        <SkeletonList />
+        // No cached feed -> engage the wait with rotating facts (+ skeleton)
+        <WakingState waking={waking} />
       ) : error ? (
         <Empty text={error} />
       ) : visible.length === 0 ? (
@@ -202,10 +218,45 @@ export default function App() {
   )
 }
 
-// ---------------------------------------------------------------------------
-// SMALL COMPONENTS — each is just a function returning JSX.
-// ---------------------------------------------------------------------------
-function Header({ theme, onToggleTheme, meta }) {
+// Shown only when there's NOTHING cached to display during a cold start.
+// Rotates a market fact every few seconds so the wait feels alive.
+function WakingState({ waking }) {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * MARKET_FACTS.length))
+  useEffect(() => {
+    const id = setInterval(() => {
+      setIdx((i) => (i + 1) % MARKET_FACTS.length)
+    }, 4500)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div>
+      <div style={{
+        padding: '18px 18px', marginBottom: 14, borderRadius: 12,
+        background: 'var(--surface)', border: '0.5px solid var(--border)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span className="pulse-dot" style={{
+            display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+            background: 'var(--green)',
+          }} />
+          <span style={{ fontSize: 12, color: 'var(--text-2)', fontWeight: 500 }}>
+            {waking ? 'Waking the news server — fetching the latest…' : 'Loading the latest news…'}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+          Did you know?
+        </div>
+        <p style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--text)', margin: 0, minHeight: 44 }}>
+          {MARKET_FACTS[idx]}
+        </p>
+      </div>
+      <SkeletonList />
+    </div>
+  )
+}
+
+function Header({ theme, onToggleTheme, meta, fromCache, waking }) {
   const updated = meta?.updated_at ? timeAgo(meta.updated_at) : null
   return (
     <div style={{ marginBottom: 16 }}>
@@ -214,7 +265,13 @@ function Header({ theme, onToggleTheme, meta }) {
           <span style={{ fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>Arthive</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          {updated && (
+          {/* When showing cached data while waking, say "updating" instead of a time */}
+          {fromCache && waking ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--amber)' }}>
+              <span className="pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--amber)' }} />
+              updating…
+            </span>
+          ) : updated && (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--green)' }}>
               <span className="pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)' }} />
               updated {updated}
@@ -225,7 +282,7 @@ function Header({ theme, onToggleTheme, meta }) {
             aria-label="Toggle theme"
             style={{ background: 'none', border: 'none', fontSize: 18, color: 'var(--text-2)' }}
           >
-            {theme === 'dark' ? '☀' : '☾'}
+            {theme === 'dark' ? '\u2600' : '\u263e'}
           </button>
         </div>
       </div>
@@ -260,7 +317,7 @@ function NewsCard({ item, starred, isNew, onStar }) {
   return (
     <a
       href={item.url}
-      target="_blank"            /* opens the source article in a new tab */
+      target="_blank"
       rel="noopener noreferrer"
       style={{
         display: 'block',
@@ -273,11 +330,11 @@ function NewsCard({ item, starred, isNew, onStar }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <button
-          onClick={(e) => { e.preventDefault(); onStar() }}  /* don't follow the link */
+          onClick={(e) => { e.preventDefault(); onStar() }}
           aria-label={starred ? 'Remove from watchlist' : 'Add to watchlist'}
           style={{ background: 'none', border: 'none', fontSize: 15, color: starred ? 'var(--star)' : 'var(--text-3)', lineHeight: 1 }}
         >
-          {starred ? '★' : '☆'}
+          {starred ? '\u2605' : '\u2606'}
         </button>
         <span style={{ fontSize: 13, fontWeight: 600 }}>{item.symbol}</span>
         <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 8px', borderRadius: 999, color: tag.fg, background: tag.bg }}>
@@ -296,7 +353,6 @@ function NewsCard({ item, starred, isNew, onStar }) {
 }
 
 function SkeletonList() {
-  // shimmer placeholders while loading — feels faster than a spinner
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
       {[0, 1, 2, 3, 4].map((i) => (
